@@ -1,8 +1,52 @@
+import asyncio
 from typing import Literal, Optional, Union
 import discord
 from discord import app_commands
 from discord.ext import commands
 from pathlib import Path
+import yt_dlp
+
+ytdl = yt_dlp.YoutubeDL({
+    'format': 'bestaudio/best',
+    'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
+    'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
+    'restrictfilenames': True,
+    'noplaylist': True,
+    'nocheckcertificate': True,
+    'ignoreerrors': False,
+    'logtostderr': False,
+    'quiet': True,
+    'no_warnings': True,
+    'default_search': 'auto',
+    'source_address': '0.0.0.0',  # bind to ipv4 since ipv6 addresses cause issues sometimes # (their comment, not mine. TODO - is this accurate?)
+})
+
+ffmpeg_options = {
+    'options': '-vn',
+}
+
+
+# https://github.com/Rapptz/discord.py/blob/24b61a71c1e5e24c9f722eb95313debb2d873816/examples/basic_voice.py#L35-L54
+class YTDLSource(discord.PCMVolumeTransformer):
+    def __init__(self, source, *, data, volume=0.5):
+        super().__init__(source, volume)
+        self.data = data
+        self.title = data.get('title')
+        self.url = data.get('url')
+
+    @classmethod
+    async def from_url(cls, url, *, loop=None, stream=False):
+        loop = loop or asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
+
+        assert data is not None
+
+        # take first item from playlist
+        if 'entries' in data:
+            data = data['entries'][0]
+
+        filename = data['url'] if stream else ytdl.prepare_filename(data)
+        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
 
 class LoopBotCog(commands.GroupCog, name='loopbot'):
@@ -20,7 +64,7 @@ class LoopBotCog(commands.GroupCog, name='loopbot'):
         client_id = interaction.client.application_id
         assert client_id is not None
         invite_link = bot_invite_link(client_id=client_id, permissions='2150629376')
-        await interaction.response.send_message(f'invite link: {invite_link}')
+        await interaction.response.send_message(f'🔗 invite link: {invite_link}')
 
     @app_commands.command(name='joinvc')
     async def cmd_join_vc(self, interaction: discord.Interaction, channel: discord.VoiceChannel) -> None:
@@ -47,6 +91,15 @@ class LoopBotCog(commands.GroupCog, name='loopbot'):
         else:
             await self.voice_client.disconnect()
             await interaction.response.send_message(content='✅ disconnected')
+
+    @app_commands.command(name='play')
+    async def cmd_play(self, interaction: discord.Interaction, url: str) -> None:
+        assert self.voice_client is not None
+        await interaction.response.send_message('downloading...')
+        player = await YTDLSource.from_url(url, loop=False)
+        await interaction.edit_original_response(content='playing...')
+        self.voice_client.play(player, after=lambda e: print(f'player error: {e}') if e else None)
+
 
 
 # based on https://stackoverflow.com/a/63107461/8762161
@@ -99,7 +152,6 @@ class SyncMentionCog(PingCommandCog):
             else:
                 ret += 1
         await ctx.send(f"Synced the tree to {ret}/{len(guilds)}.")
-
 
 def bot_command_prefix(bot: commands.Bot, message: discord.Message) -> list[str]:
     prefixes = []
