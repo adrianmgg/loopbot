@@ -1,14 +1,15 @@
 import asyncio
-from typing import Literal, Optional, Union
+from typing import AsyncGenerator, Literal, Optional, Union
 import discord
 from discord import app_commands
 from discord.ext import commands
 from pathlib import Path
 import yt_dlp
 
+from loopbot import remixatron
+
 ytdl = yt_dlp.YoutubeDL({
     'format': 'bestaudio/best',
-    'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
     'restrictfilenames': True,
     'noplaylist': True,
@@ -25,28 +26,41 @@ ffmpeg_options = {
     'options': '-vn',
 }
 
+async def ytdl_async_download_helper(url):
+    data = await asyncio.get_event_loop().run_in_executor(None, lambda: ytdl.extract_info(url, download=True))
+    assert data is not None
+    # take first item from playlist
+    if 'entries' in data:
+        data = data['entries'][0]
+    filename = ytdl.prepare_filename(data)
+    # TODO expose title, url, etc. also
+    return filename
+
+# https://stackoverflow.com/a/53996189/8762161
+def jukebox_process_async_helper(input_file):
+    loop = asyncio.get_event_loop()
+    queue = asyncio.Queue[tuple[float, str]]()
+    def on_progress(percentage: float, message: str) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, (percentage, message))
+    async def get_progress() -> AsyncGenerator[tuple[float, str], None]:
+        while True:
+            yield await queue.get()
+    def make_jukebox():
+        return remixatron.InfiniteJukebox(filename=input_file, progress_callback=on_progress, do_async=True)
+    jukebox_aio = loop.run_in_executor(None, make_jukebox)
+    return jukebox_aio, get_progress()
+
+
 
 # https://github.com/Rapptz/discord.py/blob/24b61a71c1e5e24c9f722eb95313debb2d873816/examples/basic_voice.py#L35-L54
-class YTDLSource(discord.PCMVolumeTransformer):
-    def __init__(self, source, *, data, volume=0.5):
+class InfiniteJukeboxYTDLSource(discord.PCMVolumeTransformer):
+    def __init__(self, source, *, volume=0.5):
         super().__init__(source, volume)
-        self.data = data
-        self.title = data.get('title')
-        self.url = data.get('url')
 
     @classmethod
-    async def from_url(cls, url, *, loop=None, stream=False):
-        loop = loop or asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
-
-        assert data is not None
-
-        # take first item from playlist
-        if 'entries' in data:
-            data = data['entries'][0]
-
-        filename = data['url'] if stream else ytdl.prepare_filename(data)
-        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+    async def from_url(cls, url):
+        filename = await ytdl_async_download_helper(url=url)
+        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options))
 
 
 class LoopBotCog(commands.GroupCog, name='loopbot'):
@@ -96,9 +110,14 @@ class LoopBotCog(commands.GroupCog, name='loopbot'):
     async def cmd_play(self, interaction: discord.Interaction, url: str) -> None:
         assert self.voice_client is not None
         await interaction.response.send_message('downloading...')
-        player = await YTDLSource.from_url(url, loop=False)
-        await interaction.edit_original_response(content='playing...')
-        self.voice_client.play(player, after=lambda e: print(f'player error: {e}') if e else None)
+        filename = await ytdl_async_download_helper(url=url)
+        await interaction.edit_original_response(content='processing...')
+        jukebox_aio, jukebox_aio_progress = jukebox_process_async_helper(filename)
+        async for percent, message in jukebox_aio_progress:
+            await interaction.edit_original_response(content=f'processing - {percent*100}% - "{message}"')
+        jukebox = await jukebox_aio
+        # await interaction.edit_original_response(content='playing...')
+        # self.voice_client.play(player, after=lambda e: print(f'player error: {e}') if e else None)
 
 
 
