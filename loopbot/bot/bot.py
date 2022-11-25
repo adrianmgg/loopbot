@@ -43,13 +43,32 @@ def jukebox_process_async_helper(input_file):
     def on_progress(percentage: float, message: str) -> None:
         loop.call_soon_threadsafe(queue.put_nowait, (percentage, message))
     async def get_progress() -> AsyncGenerator[tuple[float, str], None]:
-        while True:
-            yield await queue.get()
+        done = False # TODO actually check on the jukebox rather than doing this as % based
+        while not done:
+            ret = await queue.get()
+            yield ret
+            if ret[0] >= 1:
+                done = True
     def make_jukebox():
-        return remixatron.InfiniteJukebox(filename=input_file, progress_callback=on_progress, do_async=True)
+        jukebox = remixatron.InfiniteJukebox(filename=input_file, progress_callback=on_progress, do_async=False)
+        return jukebox
     jukebox_aio = loop.run_in_executor(None, make_jukebox)
     return jukebox_aio, get_progress()
 
+# https://github.com/drensin/Remixatron/blob/71d855ad65399683ba81df394beb8a27e2a1a7ea/infinite_jukebox.py#L147-L184
+def get_jukebox_verbose_info(jukebox: remixatron.InfiniteJukebox):
+    minutes, seconds = divmod(round(jukebox.duration), 60)
+    hours, minutes = divmod(minutes, 60)
+    return (
+        discord.Embed(title='Infinite Jukebox info', description='description', colour=discord.Colour.og_blurple())
+            .add_field(name='duration', value=f'{hours:02}:{minutes:02}:{seconds:02}', inline=True)
+            .add_field(name='beats', value=f'{len(jukebox.beats)}', inline=True)
+            # .add_field(name='tempo', value=f'{int(round(jukebox.tempo))} bpm', inline=True)
+            .add_field(name='tempo', value=f'{jukebox.tempo} bpm', inline=True)
+            .add_field(name='clusters', value=f'{jukebox.clusters}', inline=True)
+            .add_field(name='segments', value=f'{jukebox.segments}', inline=True)
+            .add_field(name='sample rate', value=f'{jukebox.sample_rate}', inline=True)
+    )
 
 
 # https://github.com/Rapptz/discord.py/blob/24b61a71c1e5e24c9f722eb95313debb2d873816/examples/basic_voice.py#L35-L54
@@ -64,12 +83,14 @@ class InfiniteJukeboxYTDLSource(discord.PCMVolumeTransformer):
 
 
 class LoopBotCog(commands.GroupCog, name='loopbot'):
-    voice_client: Optional[discord.VoiceClient]
     bot: commands.Bot
+    voice_client: Optional[discord.VoiceClient]
+    jukebox: Optional[remixatron.InfiniteJukebox]
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.voice_client = None
+        self.jukebox = None
         super().__init__()
 
     @app_commands.command(name='invitelink')
@@ -115,9 +136,15 @@ class LoopBotCog(commands.GroupCog, name='loopbot'):
         jukebox_aio, jukebox_aio_progress = jukebox_process_async_helper(filename)
         async for percent, message in jukebox_aio_progress:
             await interaction.edit_original_response(content=f'processing - {percent*100}% - "{message}"')
-        jukebox = await jukebox_aio
+        print('about to await jukebox')
+        self.jukebox = await jukebox_aio
+        print('got jukebox!')
+        await interaction.edit_original_response(embed=get_jukebox_verbose_info(self.jukebox))
+        # await interaction.channel.send(embed=get_jukebox_verbose_info(self.jukebox))
         # await interaction.edit_original_response(content='playing...')
         # self.voice_client.play(player, after=lambda e: print(f'player error: {e}') if e else None)
+
+    # @app_commands.command(name='getinfo')
 
 
 
