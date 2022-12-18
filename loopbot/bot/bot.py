@@ -1,4 +1,5 @@
 import asyncio
+import time
 from typing import AsyncGenerator, Literal, Optional, Union
 import discord
 from discord import app_commands
@@ -54,6 +55,28 @@ def jukebox_process_async_helper(input_file):
         return jukebox
     jukebox_aio = loop.run_in_executor(None, make_jukebox)
     return jukebox_aio, get_progress()
+    # pass
+
+    # msg: discord.Message = some_channel.send('Processing...')
+
+    # in_progress=False
+    # last_time = 0
+
+    # loop = asyncio.get_running_loop()
+
+    # def on_progress(*args):
+    #     nonlocal in_progress, last_time
+    #     if not in_progress and last_time < time.monotonic() - 1:
+    #         in_progress = True
+    #         asyncio.run_coroutine_threadsafe(on_progress_async(*args), loop)
+    
+    # async def on_progress_async(progress: float, message: str):
+    #     nonlocal in_progress, last_time
+    #     await msg.edit(content=f'{message}... ({progress}% complete)')
+    #     last_time = time.monotonic()
+    #     in_progress = False
+
+
 
 # https://github.com/drensin/Remixatron/blob/71d855ad65399683ba81df394beb8a27e2a1a7ea/infinite_jukebox.py#L147-L184
 def get_jukebox_verbose_info(jukebox: remixatron.InfiniteJukebox):
@@ -198,6 +221,15 @@ class SyncMentionCog(PingCommandCog):
             else:
                 ret += 1
         await ctx.send(f"Synced the tree to {ret}/{len(guilds)}.")
+
+def cmd_help_text(command: commands.Command):
+    command.params
+
+class KillBotCog(PingCommandCog):
+    @commands.command()
+    @commands.is_owner()
+    async def stop(self, ctx: commands.Context, kill_mode: Optional[Literal['graceful', 'force']] = None) -> None:
+        cmd_help_text(ctx.command)
 
 def bot_command_prefix(bot: commands.Bot, message: discord.Message) -> list[str]:
     prefixes = []
